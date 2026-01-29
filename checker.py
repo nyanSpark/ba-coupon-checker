@@ -25,7 +25,9 @@ class Config:
 
     # Schedule
     RUN_ONCE: bool = False
-    INTERVAL_SECONDS: int = 20
+    INTERVAL_SECONDS: int = 10
+    RANDOM_INTERVAL_MIN: int = 10
+    RANDOM_INTERVAL_MAX: int = 50
 
     # Browser behavior
     HEADLESS: bool = True
@@ -269,7 +271,8 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool]:
             context.close()
             browser.close()
 
-def get_randomized_interval(base: int = CFG.INTERVAL_SECONDS, min_extra: int = 10, max_extra: int = 50) -> int:
+
+def get_randomized_interval(base: int = CFG.INTERVAL_SECONDS, min_extra: int = CFG.RANDOM_INTERVAL_MIN, max_extra: int = CFG.RANDOM_INTERVAL_MAX) -> int:
     """
     Returns base interval plus a random integer between min_extra and max_extra (inclusive).
     """
