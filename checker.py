@@ -35,7 +35,7 @@ class Config:
     ACTION_TIMEOUT_MS: int = 10_000
 
     # Discord
-    DISCORD_WEBHOOK_URL: str = ""  # paste webhook url here (for example: https://discord.com/api/webhooks/<number>/<big hash>)
+    DISCORD_WEBHOOK_URL: str = ""  # paste webhook url here (for example: https://discord.com/api/webhooks/<number>/<hash>)
 
     ALWAYS_SEND_DISCORD: bool = False
     SEND_SCREENSHOT_ON_EVERY_RUN: bool = False
