@@ -269,6 +269,13 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool]:
             context.close()
             browser.close()
 
+def get_randomized_interval(base: int = CFG.INTERVAL_SECONDS, min_extra: int = 10, max_extra: int = 50) -> int:
+    """
+    Returns base interval plus a random integer between min_extra and max_extra (inclusive).
+    """
+    extra = random.randint(min_extra, max_extra)
+    return base + extra
+
 
 def main() -> None:
     run_count = 0
@@ -290,8 +297,11 @@ def main() -> None:
         if CFG.RUN_ONCE:
             break
 
-        time.sleep(max(1, CFG.INTERVAL_SECONDS))
+        wait_time = get_randomized_interval(CFG.INTERVAL_SECONDS)
+        print(f"Waiting {wait_time} seconds before next run...")
+        time.sleep(wait_time)
 
 
 if __name__ == "__main__":
     main()
+
