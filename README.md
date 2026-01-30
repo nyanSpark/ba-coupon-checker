@@ -3,7 +3,7 @@ A Playwright-based synthetic monitoring script that performs automated end-to-en
 
 # Requirements
 Built on Python 3.13.7
-Install:
+- Install:
   - `pip install playwright requests`
   - `playwright install chromium`
 
