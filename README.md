@@ -4,8 +4,8 @@ A Playwright-based synthetic monitoring script that performs automated end-to-en
 # Requirements
 Built on Python 3.13.7
 Install:
-  - pip install playwright requests
-  - playwright install chromium
+  - `pip install playwright requests`
+  - `playwright install chromium`
 
 ## To-Do
 * Add Config for forced coupon code usage, bypassing coupon generation (reverse happy path test).
