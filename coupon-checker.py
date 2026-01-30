@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Automated Web Form Tester
+Automated Web Form Tester (single-layer: scheduler + runner)
 Built on Python 3.13.7
 Install:
   pip install playwright requests
@@ -19,26 +19,28 @@ from typing import Dict, Optional, Tuple
 import requests
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+
 @dataclass(frozen=True)
 class Config:
-    URL: str = ""  # paste the url to check here here (for example: https://mcoupon.nexon.com/bluearchive)
+    # User Defined Inputs
+    URL: str = ""  # paste URL to test here (eg. https://mcoupon.nexon.com/bluearchive)
+    DISCORD_WEBHOOK_URL: str = ""  # paste webhook url here (eg. https://discord.com/api/webhooks/<number>/<hash>)
+    MEMBER_CODE_VALUE: str = ""  # paste member code here (eg. 0ZE12A98060BY)
 
-    # Schedule
-    RUN_ONCE: bool = False
-    INTERVAL_SECONDS: int = 10
-    RANDOM_INTERVAL_MIN: int = 10
-    RANDOM_INTERVAL_MAX: int = 50
+    # Discord behavior
+    ALWAYS_SEND_DISCORD: bool = False  # if False, it will still alert on finding unexpected behavior
+    SEND_SCREENSHOT_ON_EVERY_RUN: bool = True
 
     # Browser behavior
     HEADLESS: bool = True
     NAVIGATION_TIMEOUT_MS: int = 30_000
     ACTION_TIMEOUT_MS: int = 10_000
 
-    # Discord
-    DISCORD_WEBHOOK_URL: str = ""  # paste webhook url here (for example: https://discord.com/api/webhooks/<number>/<hash>)
-
-    ALWAYS_SEND_DISCORD: bool = False
-    SEND_SCREENSHOT_ON_EVERY_RUN: bool = False
+    # Schedule
+    RUN_ONCE: bool = False
+    INTERVAL_SECONDS: int = 10
+    RANDOM_INTERVAL_MIN: int = 20
+    RANDOM_INTERVAL_MAX: int = 50
 
     # Stop on unexpected popup message
     STOP_ON_UNEXPECTED: bool = True
@@ -52,7 +54,6 @@ class Config:
 
     # Inputs
     MEMBER_CODE_SELECTOR: str = "#eRedeemNpaCode"
-    MEMBER_CODE_VALUE: str = ""  # paste Member Code here: (for example: 0ZE12A98060BY)
     COUPON_CODE_SELECTOR: str = "#eRedeemCoupon"
 
     # Redeem button
@@ -60,7 +61,7 @@ class Config:
 
     # Popup specifics (key change: wait for #popAlert to become "on")
     POPUP_ROOT_SELECTOR: str = "#popAlert"
-    POPUP_ON_SELECTOR: str = "#popAlert.pop.on"   # CSS selector that only matches once class "on" is present
+    POPUP_ON_SELECTOR: str = "#popAlert.pop.on"  # CSS selector that only matches once class "on" is present
     POPUP_MESSAGE_SELECTOR: str = "#popAlert p.pop_msg"
 
     # Expected “normal failure” popup message (HTML includes <br>)
@@ -73,6 +74,20 @@ class Config:
 
     # Screenshot
     SCREENSHOT_DIR: str = "screenshots"
+
+    # -------------------------
+    # SOCKS5 Proxy support
+    # -------------------------
+    # If empty, no proxy is used (behavior unchanged).
+    SOCKS5_PROXIES: Tuple[str, ...] = (
+        "193.233.254.8:1080",
+        "64.227.131.240:1080",
+    )
+
+    # Optional: if SOCKS5 proxy requires auth, set these (leave blank otherwise).
+    # If set, they apply to whichever proxy is randomly chosen.
+    SOCKS5_USERNAME: str = ""
+    SOCKS5_PASSWORD: str = ""
 
 
 CFG = Config()
@@ -95,6 +110,45 @@ def send_discord(webhook_url: str, content: str, file_path: Optional[str] = None
         data = {"content": content}
         resp = requests.post(webhook_url, data=data, files=files, timeout=30)
         resp.raise_for_status()
+
+
+def _normalize_socks5_proxy(server: str) -> str:
+    """
+    Playwright expects proxy server string:
+      "socks5://ip:port"
+    """
+    s = server.strip()
+    if not s:
+        return s
+    if "://" not in s:
+        s = f"socks5://{s}"
+    return s
+
+
+def _pick_playwright_socks5_proxy(cfg: Config) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
+    """
+    Randomly pick a SOCKS5 proxy from cfg.SOCKS5_PROXIES (if any).
+
+    Returns:
+      (proxy_dict_for_playwright, proxy_server_string)
+    """
+    if not cfg.SOCKS5_PROXIES:
+        return None, None
+
+    choice = random.choice(cfg.SOCKS5_PROXIES)
+    server = _normalize_socks5_proxy(choice)
+    if not server:
+        return None, None
+
+    proxy: Dict[str, str] = {"server": server}
+
+    # Optional auth
+    if cfg.SOCKS5_USERNAME:
+        proxy["username"] = cfg.SOCKS5_USERNAME
+    if cfg.SOCKS5_PASSWORD:
+        proxy["password"] = cfg.SOCKS5_PASSWORD
+
+    return proxy, server
 
 
 def generate_coupon_code(rng: random.Random) -> str:
@@ -156,15 +210,33 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool]:
     coupon_code_used: Optional[str] = None
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=cfg.HEADLESS)
+        # SOCKS5: choose a proxy (or None) for this run
+        proxy, proxy_server = _pick_playwright_socks5_proxy(cfg)
+        print(f"Proxy Picked: {proxy}")
+        # Launch with proxy if provided; otherwise unchanged behavior
+        browser = (
+            p.chromium.launch(headless=cfg.HEADLESS, proxy=proxy)
+            if proxy
+            else p.chromium.launch(headless=cfg.HEADLESS)
+        )
+
         context = browser.new_context()
         page = context.new_page()
         page.set_default_navigation_timeout(cfg.NAVIGATION_TIMEOUT_MS)
         page.set_default_timeout(cfg.ACTION_TIMEOUT_MS)
 
         try:
-            # Navigate
-            page.goto(cfg.URL, wait_until="domcontentloaded")
+            # Navigate (proxy observability requested)
+            try:
+                page.goto(cfg.URL, wait_until="domcontentloaded")
+                if proxy_server:
+                    print(f"[PROXY OK] Successfully loaded page via proxy: {proxy_server}")
+            except Exception as e:
+                if proxy_server:
+                    print(f"[PROXY FAIL] Failed to load page via proxy: {proxy_server}")
+                    print(f"[PROXY FAIL] Error: {e!s}")
+                raise
+
             page.wait_for_selector(cfg.HEALTHCHECK_SELECTOR)
 
             # Ensure popup root exists (it exists even before clicking Redeem)
@@ -272,7 +344,11 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool]:
             browser.close()
 
 
-def get_randomized_interval(base: int = CFG.INTERVAL_SECONDS, min_extra: int = CFG.RANDOM_INTERVAL_MIN, max_extra: int = CFG.RANDOM_INTERVAL_MAX) -> int:
+def get_randomized_interval(
+    base: int = CFG.INTERVAL_SECONDS,
+    min_extra: int = CFG.RANDOM_INTERVAL_MIN,
+    max_extra: int = CFG.RANDOM_INTERVAL_MAX,
+) -> int:
     """
     Returns base interval plus a random integer between min_extra and max_extra (inclusive).
     """
@@ -307,4 +383,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
