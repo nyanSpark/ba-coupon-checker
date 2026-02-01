@@ -202,6 +202,7 @@ def _is_proxyish_playwright_error(err: Exception) -> bool:
         "net::ERR_PROXY",
         "net::ERR_NO_SUPPORTED_PROXIES",
         "net::ERR_TUNNEL_CONNECTION_FAILED",
+        "net::ERR_SOCKS_CONNECTION_FAILED",
         "net::ERR_CONNECTION_RESET",
         "net::ERR_CONNECTION_CLOSED",
         "net::ERR_CONNECTION_REFUSED",
