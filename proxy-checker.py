@@ -1,26 +1,6 @@
 #!/usr/bin/env python3
 """
 Sequential SOCKS5 proxy tester using Playwright.
-
-- Tests each SOCKS5 proxy by loading:
-  https://mcoupon.nexon.com/bluearchive
-
-- Retry logic (configurable):
-  * You control how many RETRIES to do after the first attempt:
-      RETRIES_PER_PROXY = 0  -> no retry (1 total attempt)
-      RETRIES_PER_PROXY = 2  -> up to 3 total attempts
-      RETRIES_PER_PROXY = 6  -> up to 7 total attempts
-  * Wait RETRY_WAIT_SECONDS between attempts.
-
-- Rate limiting (configurable):
-  * Wait a random 2–5 seconds between proxy checks.
-
-- Output:
-  * Writes working proxies (that load and have a non-empty page title) to:
-    good_socks5_proxies.txt
-
-  * Format (each on its own line):
-    "<ip>:<port",
 """
 
 from __future__ import annotations
