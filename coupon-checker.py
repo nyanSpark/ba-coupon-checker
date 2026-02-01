@@ -1,10 +1,6 @@
 #!/usr/bin/env python3
 """
 Automated Web Form Tester (single-layer: scheduler + runner)
-Built on Python 3.13.7
-Install:
-  pip install playwright requests
-  playwright install chromium
 """
 
 from __future__ import annotations
@@ -23,24 +19,24 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 @dataclass(frozen=True)
 class Config:
     # User Defined Inputs
-    URL: str = ""  # paste URL to test here (eg. https://mcoupon.nexon.com/bluearchive)
-    DISCORD_WEBHOOK_URL: str = ""  # paste webhook url here (eg. https://discord.com/api/webhooks/<number>/<hash>)
-    MEMBER_CODE_VALUE: str = ""  # paste member code here (eg. 0ZE12A98060BY)
+    URL: str = ""
+    DISCORD_WEBHOOK_URL: str = ""
+    MEMBER_CODE_VALUE: str = ""
 
     # Discord behavior
-    ALWAYS_SEND_DISCORD: bool = False  # if False, it will still alert on finding unexpected behavior
+    ALWAYS_SEND_DISCORD: bool = False
     SEND_SCREENSHOT_ON_EVERY_RUN: bool = True
 
     # Browser behavior
     HEADLESS: bool = True
-    NAVIGATION_TIMEOUT_MS: int = 30_000
+    NAVIGATION_TIMEOUT_MS: int = 10_000
     ACTION_TIMEOUT_MS: int = 10_000
 
     # Schedule
     RUN_ONCE: bool = False
-    INTERVAL_SECONDS: int = 10
-    RANDOM_INTERVAL_MIN: int = 20
-    RANDOM_INTERVAL_MAX: int = 50
+    INTERVAL_SECONDS: int = 5
+    RANDOM_INTERVAL_MIN: int = 1
+    RANDOM_INTERVAL_MAX: int = 55
 
     # Stop on unexpected popup message
     STOP_ON_UNEXPECTED: bool = True
@@ -59,18 +55,16 @@ class Config:
     # Redeem button
     REDEEM_BUTTON_SELECTOR: str = "button.btn_confirm.e-characters-with-npacode[data-message='redeem']"
 
-    # Popup specifics (key change: wait for #popAlert to become "on")
+    # Popup specifics
     POPUP_ROOT_SELECTOR: str = "#popAlert"
-    POPUP_ON_SELECTOR: str = "#popAlert.pop.on"  # CSS selector that only matches once class "on" is present
+    POPUP_ON_SELECTOR: str = "#popAlert.pop.on"
     POPUP_MESSAGE_SELECTOR: str = "#popAlert p.pop_msg"
 
-    # Expected “normal failure” popup message (HTML includes <br>)
     EXPECTED_POPUP_MESSAGE_HTML: str = (
         "The coupon cannot be used in this game.<br>Please check the coupon number again."
     )
 
-    # Waits
-    POPUP_ON_WAIT_TIMEOUT_MS: int = 12_000
+    POPUP_ON_WAIT_TIMEOUT_MS: int = 10_000
 
     # Screenshot
     SCREENSHOT_DIR: str = "screenshots"
@@ -78,31 +72,33 @@ class Config:
     # -------------------------
     # SOCKS5 Proxy support
     # -------------------------
-    # If empty, no proxy is used (behavior unchanged).
     SOCKS5_PROXIES: Tuple[str, ...] = (
-        "193.233.254.8:1080",
-        "64.227.131.240:1080",
-        "193.233.254.8:1080",
-        "103.163.244.106:1080",
-        "64.227.131.240:1080",
-        "121.169.46.116:1090",
         "174.138.61.184:1080",
+        "193.233.254.8:1080",
+        "121.169.46.116:1090",
+        "185.194.217.97:1080",
         "194.163.167.32:1080",
         "195.35.113.29:1080",
-        "185.194.217.97:1080",
-        "62.60.131.253:7649",
-        "62.60.131.253:5427",
-        "62.60.131.203:5131",
-        "62.60.131.205:19541",
-        "187.63.9.62:63253",
-        "37.18.73.60:5566",
-        "102.217.190.157:7080",
+        "64.227.131.240:1080",
+        "174.138.61.184:1080",
+        "195.35.113.29:1080",
     )
-
-    # Optional: if SOCKS5 proxy requires auth, set these (leave blank otherwise).
-    # If set, they apply to whichever proxy is randomly chosen.
     SOCKS5_USERNAME: str = ""
     SOCKS5_PASSWORD: str = ""
+
+    # -------------------------
+    # Proxy IP verification (toggleable)
+    # -------------------------
+    ENABLE_PROXY_IP_CHECK: bool = False
+    PROXY_IP_CHECK_URL: str = "https://api.ipify.org?format=json"
+    PROXY_IP_CHECK_TIMEOUT_MS: int = 8_000
+
+    # -------------------------
+    # Logging verbosity
+    # -------------------------
+    # If False: even non-proxy failures print one-line only (no traceback dumps).
+    # If True: non-proxy failures will include a traceback in stdout (old behavior).
+    VERBOSE_NON_PROXY_ERRORS: bool = False
 
 
 CFG = Config()
@@ -128,10 +124,6 @@ def send_discord(webhook_url: str, content: str, file_path: Optional[str] = None
 
 
 def _normalize_socks5_proxy(server: str) -> str:
-    """
-    Playwright expects proxy server string:
-      "socks5://ip:port"
-    """
     s = server.strip()
     if not s:
         return s
@@ -141,12 +133,6 @@ def _normalize_socks5_proxy(server: str) -> str:
 
 
 def _pick_playwright_socks5_proxy(cfg: Config) -> Tuple[Optional[Dict[str, str]], Optional[str]]:
-    """
-    Randomly pick a SOCKS5 proxy from cfg.SOCKS5_PROXIES (if any).
-
-    Returns:
-      (proxy_dict_for_playwright, proxy_server_string)
-    """
     if not cfg.SOCKS5_PROXIES:
         return None, None
 
@@ -156,8 +142,6 @@ def _pick_playwright_socks5_proxy(cfg: Config) -> Tuple[Optional[Dict[str, str]]
         return None, None
 
     proxy: Dict[str, str] = {"server": server}
-
-    # Optional auth
     if cfg.SOCKS5_USERNAME:
         proxy["username"] = cfg.SOCKS5_USERNAME
     if cfg.SOCKS5_PASSWORD:
@@ -187,20 +171,17 @@ def generate_coupon_code(rng: random.Random) -> str:
         counts.clear()
         out = []
         prev: Optional[str] = None
-
         try:
             for _ in range(5):
                 ch = pick_from(ALPHANUM, prev)
                 out.append(ch)
                 counts[ch] = counts.get(ch, 0) + 1
                 prev = ch
-
             for _ in range(5):
                 ch = pick_from(LETTERS, prev)
                 out.append(ch)
                 counts[ch] = counts.get(ch, 0) + 1
                 prev = ch
-
             return "".join(out)
         except RuntimeError:
             continue
@@ -216,24 +197,69 @@ def save_screenshot(page, screenshot_dir: str, prefix: str) -> str:
     return path
 
 
-def run_once(cfg: Config) -> Tuple[bool, str, bool]:
+def _is_proxyish_playwright_error(err: Exception) -> bool:
+    msg = str(err)
+    markers = [
+        "net::ERR_PROXY",
+        "net::ERR_NO_SUPPORTED_PROXIES",
+        "net::ERR_TUNNEL_CONNECTION_FAILED",
+        "net::ERR_CONNECTION_RESET",
+        "net::ERR_CONNECTION_CLOSED",
+        "net::ERR_CONNECTION_REFUSED",
+        "net::ERR_ADDRESS_UNREACHABLE",
+        "net::ERR_NAME_NOT_RESOLVED",
+        "net::ERR_TIMED_OUT",
+        "net::ERR_EMPTY_RESPONSE",
+        "Proxy",
+    ]
+    return any(m in msg for m in markers)
+
+
+def _one_line_error(e: Exception, limit: int = 180) -> str:
+    s = str(e).replace("\n", " ").strip()
+    if len(s) > limit:
+        s = s[: limit - 3] + "..."
+    return s or type(e).__name__
+
+
+def _check_public_ip_via_proxy(context, cfg: Config) -> Optional[str]:
+    try:
+        resp = context.request.get(cfg.PROXY_IP_CHECK_URL, timeout=cfg.PROXY_IP_CHECK_TIMEOUT_MS)
+        if not resp.ok:
+            return None
+        data = resp.json()
+        ip = (data.get("ip") if isinstance(data, dict) else None) or None
+        return str(ip).strip() if ip else None
+    except Exception:
+        return None
+
+
+def run_once(cfg: Config) -> Tuple[bool, str, bool, bool]:
     """
     Returns:
-      (ok, message, should_stop)
+      (ok, message, should_stop, proxy_load_error)
     """
     rng = random.Random()
     coupon_code_used: Optional[str] = None
+    proxy_load_error = False
+    observed_proxy_ip: Optional[str] = None
+    proxy_server: Optional[str] = None
 
     with sync_playwright() as p:
-        # SOCKS5: choose a proxy (or None) for this run
         proxy, proxy_server = _pick_playwright_socks5_proxy(cfg)
         print(f"Proxy Picked: {proxy}")
-        # Launch with proxy if provided; otherwise unchanged behavior
-        browser = (
-            p.chromium.launch(headless=cfg.HEADLESS, proxy=proxy)
-            if proxy
-            else p.chromium.launch(headless=cfg.HEADLESS)
-        )
+
+        try:
+            browser = (
+                p.chromium.launch(headless=cfg.HEADLESS, proxy=proxy)
+                if proxy
+                else p.chromium.launch(headless=cfg.HEADLESS)
+            )
+        except Exception as e:
+            if proxy_server:
+                proxy_load_error = True
+                print(f"⚠️ PROXY FAIL {proxy_server} → {_one_line_error(e)}")
+            raise
 
         context = browser.new_context()
         page = context.new_page()
@@ -241,37 +267,50 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool]:
         page.set_default_timeout(cfg.ACTION_TIMEOUT_MS)
 
         try:
-            # Navigate (proxy observability requested)
+            # Navigate
             try:
                 page.goto(cfg.URL, wait_until="domcontentloaded")
                 if proxy_server:
-                    print(f"[PROXY OK] Successfully loaded page via proxy: {proxy_server}")
-            except Exception as e:
+                    print(f"[PROXY OK] Loaded via proxy: {proxy_server}")
+
+                    if cfg.ENABLE_PROXY_IP_CHECK:
+                        observed_proxy_ip = _check_public_ip_via_proxy(context, cfg)
+                        if observed_proxy_ip:
+                            print(f"[PROXY IP] {observed_proxy_ip}")
+                        else:
+                            print("[PROXY IP] (unknown)")
+                    else:
+                        print("[PROXY IP] Skipped (ENABLE_PROXY_IP_CHECK=False)")
+
+            except PlaywrightTimeoutError as e:
                 if proxy_server:
-                    print(f"[PROXY FAIL] Failed to load page via proxy: {proxy_server}")
-                    print(f"[PROXY FAIL] Error: {e!s}")
+                    proxy_load_error = True
+                    print(f"⚠️ PROXY FAIL {proxy_server} → TIMEOUT")
+                raise
+            except Exception as e:
+                if proxy_server and _is_proxyish_playwright_error(e):
+                    proxy_load_error = True
+                    print(f"⚠️ PROXY FAIL {proxy_server} → {_one_line_error(e)}")
                 raise
 
             page.wait_for_selector(cfg.HEALTHCHECK_SELECTOR)
-
-            # Ensure popup root exists (it exists even before clicking Redeem)
             page.wait_for_selector(cfg.POPUP_ROOT_SELECTOR, state="attached")
 
-            # Select region + verify
+            # Region dropdown selection
             page.wait_for_selector(cfg.REGION_SELECT_SELECTOR)
             page.select_option(cfg.REGION_SELECT_SELECTOR, value=cfg.REGION_VALUE)
             selected = page.input_value(cfg.REGION_SELECT_SELECTOR)
             if selected != cfg.REGION_VALUE:
                 raise RuntimeError(f"Region selection failed: expected '{cfg.REGION_VALUE}', got '{selected}'")
 
-            # Fill member code + verify
+            # Fill member code
             page.wait_for_selector(cfg.MEMBER_CODE_SELECTOR)
             page.fill(cfg.MEMBER_CODE_SELECTOR, cfg.MEMBER_CODE_VALUE)
             member_val = page.input_value(cfg.MEMBER_CODE_SELECTOR)
             if member_val != cfg.MEMBER_CODE_VALUE:
                 raise RuntimeError(f"Member code fill failed: expected '{cfg.MEMBER_CODE_VALUE}', got '{member_val}'")
 
-            # Generate + fill coupon code + verify
+            # Coupon code
             coupon_code_used = generate_coupon_code(rng)
             page.wait_for_selector(cfg.COUPON_CODE_SELECTOR)
             page.fill(cfg.COUPON_CODE_SELECTOR, coupon_code_used)
@@ -283,8 +322,7 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool]:
             page.wait_for_selector(cfg.REDEEM_BUTTON_SELECTOR)
             page.click(cfg.REDEEM_BUTTON_SELECTOR)
 
-            # KEY CHANGE:
-            # Wait until the popup becomes "active" by gaining the "on" class:
+            # Wait for popup to become "on"
             try:
                 page.wait_for_selector(cfg.POPUP_ON_SELECTOR, timeout=cfg.POPUP_ON_WAIT_TIMEOUT_MS)
             except PlaywrightTimeoutError:
@@ -295,19 +333,20 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool]:
                     f"Waited for selector: {cfg.POPUP_ON_SELECTOR}\n"
                     f"Screenshot: {shot}"
                 )
+                if proxy_server and observed_proxy_ip:
+                    msg += f"\nProxy: {proxy_server}\nProxy IP: {observed_proxy_ip}"
+                elif proxy_server:
+                    msg += f"\nProxy: {proxy_server}\nProxy IP: (unknown)"
+
                 if cfg.DISCORD_WEBHOOK_URL and cfg.ALWAYS_SEND_DISCORD:
                     send_discord(cfg.DISCORD_WEBHOOK_URL, f"⚠️ Popup not 'on'\n```{msg}```", shot)
-                return False, msg, False
+                return False, msg, False, proxy_load_error
 
-            # Now popup is active; read message HTML (preserve <br>)
             popup_html = page.inner_html(cfg.POPUP_MESSAGE_SELECTOR).strip()
-
-            # Screenshot after popup is "on"
             shot = save_screenshot(page, cfg.SCREENSHOT_DIR, "popup_on")
 
             is_expected_failure = (popup_html == cfg.EXPECTED_POPUP_MESSAGE_HTML)
 
-            # Clear log message
             if is_expected_failure:
                 log_msg = (
                     "Popup detected (popAlert is 'on'). Redemption failed as expected (normal invalid-coupon message).\n"
@@ -324,11 +363,21 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool]:
                     f"Screenshot: {shot}"
                 )
 
+            if proxy_server and observed_proxy_ip:
+                log_msg += f"\nProxy: {proxy_server}\nProxy IP: {observed_proxy_ip}"
+            elif proxy_server:
+                log_msg += f"\nProxy: {proxy_server}\nProxy IP: (unknown)"
+
             # Discord behavior
             if cfg.DISCORD_WEBHOOK_URL:
                 if cfg.ALWAYS_SEND_DISCORD:
                     header = "✅ Expected failure popup" if is_expected_failure else "🚨 Unexpected popup"
                     content = f"{header}\nCoupon: `{coupon_code_used}`\nPopup HTML: `{popup_html}`"
+                    if proxy_server and observed_proxy_ip:
+                        content += f"\nProxy: `{proxy_server}`\nProxy IP: `{observed_proxy_ip}`"
+                    elif proxy_server:
+                        content += f"\nProxy: `{proxy_server}`\nProxy IP: `(unknown)`"
+
                     if cfg.SEND_SCREENSHOT_ON_EVERY_RUN:
                         send_discord(cfg.DISCORD_WEBHOOK_URL, content, shot)
                     else:
@@ -340,19 +389,44 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool]:
                             f"Coupon: `{coupon_code_used}`\n"
                             f"Popup HTML: `{popup_html}`"
                         )
+                        if proxy_server and observed_proxy_ip:
+                            content += f"\nProxy: `{proxy_server}`\nProxy IP: `{observed_proxy_ip}`"
+                        elif proxy_server:
+                            content += f"\nProxy: `{proxy_server}`\nProxy IP: `(unknown)`"
+
                         send_discord(cfg.DISCORD_WEBHOOK_URL, content, shot)
 
-            # Stop on unexpected
             if (not is_expected_failure) and cfg.STOP_ON_UNEXPECTED:
-                return False, log_msg, True
+                return False, log_msg, True, proxy_load_error
 
-            return True, log_msg, False
+            return True, log_msg, False, proxy_load_error
 
         except Exception as e:
-            err = f"Exception: {e!s}\n{traceback.format_exc()}"
+            # classify & suppress tracebacks for proxy-ish errors
+            is_proxyish = proxy_server and (isinstance(e, PlaywrightTimeoutError) or _is_proxyish_playwright_error(e))
+            if is_proxyish:
+                proxy_load_error = True
+                # Keep message one-line (no traceback spam)
+                msg = f"⚠️ PROXY FAIL {proxy_server} → {_one_line_error(e)}"
+                if cfg.ENABLE_PROXY_IP_CHECK and observed_proxy_ip:
+                    msg += f" | IP={observed_proxy_ip}"
+                return False, msg, False, proxy_load_error
+
+            # Non-proxy errors
+            if cfg.VERBOSE_NON_PROXY_ERRORS:
+                err = f"Exception: {e!s}\n{traceback.format_exc()}"
+            else:
+                err = f"Exception: {_one_line_error(e)}"
+
+            if proxy_server and cfg.ENABLE_PROXY_IP_CHECK:
+                err += f"\nProxy: {proxy_server}\nProxy IP: {observed_proxy_ip or '(unknown)'}"
+
             if cfg.DISCORD_WEBHOOK_URL and cfg.ALWAYS_SEND_DISCORD:
-                send_discord(cfg.DISCORD_WEBHOOK_URL, f"🚨 Exception\n```{err[:1800]}```")
-            return False, err, False
+                # Discord gets a trimmed traceback for debugging even if stdout is quiet
+                dbg = f"Exception: {e!s}\n{traceback.format_exc()}"
+                send_discord(cfg.DISCORD_WEBHOOK_URL, f"🚨 Exception\n```{dbg[:1800]}```")
+
+            return False, err, False, proxy_load_error
 
         finally:
             context.close()
@@ -364,9 +438,6 @@ def get_randomized_interval(
     min_extra: int = CFG.RANDOM_INTERVAL_MIN,
     max_extra: int = CFG.RANDOM_INTERVAL_MAX,
 ) -> int:
-    """
-    Returns base interval plus a random integer between min_extra and max_extra (inclusive).
-    """
     extra = random.randint(min_extra, max_extra)
     return base + extra
 
@@ -377,7 +448,7 @@ def main() -> None:
     while True:
         run_count += 1
         started = time.time()
-        ok, msg, should_stop = run_once(CFG)
+        ok, msg, should_stop, proxy_load_error = run_once(CFG)
         elapsed = time.time() - started
 
         stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())
@@ -390,6 +461,10 @@ def main() -> None:
 
         if CFG.RUN_ONCE:
             break
+
+        if proxy_load_error:
+            print("Proxy/playwright load error detected — skipping interval wait and starting next run immediately.")
+            continue
 
         wait_time = get_randomized_interval(CFG.INTERVAL_SECONDS)
         print(f"Waiting {wait_time} seconds before next run...")
