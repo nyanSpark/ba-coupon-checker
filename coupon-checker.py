@@ -55,16 +55,17 @@ class Config:
     # Browser behavior
     # -------------------------
     HEADLESS: bool = True
-    NAVIGATION_TIMEOUT_MS: int = 10_000
-    ACTION_TIMEOUT_MS: int = 10_000
+    NAVIGATION_TIMEOUT_MS: int = 15_000
+    ACTION_TIMEOUT_MS: int = 15_000
 
     # -------------------------
     # Schedule
     # -------------------------
     RUN_ONCE: bool = False
-    INTERVAL_SECONDS: int = 2
-    RANDOM_INTERVAL_MIN: int = 1
-    RANDOM_INTERVAL_MAX: int = 5
+    INTERVAL_SECONDS: int = 30
+    RANDOM_INTERVAL_MIN: int = 0
+    RANDOM_INTERVAL_MAX: int = 30
+    SKIP_INTERVAL_SECONDS: int = 5
 
     # -------------------------
     # Stop on unexpected popup message
@@ -83,7 +84,7 @@ class Config:
     REGION_VALUE: str = "na"
 
     # -------------------------
-    # Form input ids
+    # Inputs
     # -------------------------
     MEMBER_CODE_SELECTOR: str = "#eRedeemNpaCode"
     COUPON_CODE_SELECTOR: str = "#eRedeemCoupon"
@@ -106,22 +107,14 @@ class Config:
     )
 
     # Waits
-    POPUP_ON_WAIT_TIMEOUT_MS: int = 10_000
+    POPUP_ON_WAIT_TIMEOUT_MS: int = 15_000
 
     # -------------------------
     # SOCKS5 Proxy support
     # -------------------------
     # Put proxies as "IP:PORT" or "socks5://IP:PORT"
     SOCKS5_PROXIES: Tuple[str, ...] = (
-        "174.138.61.184:1080",
-        "193.233.254.8:1080",
-        "121.169.46.116:1090",
-        "185.194.217.97:1080",
-        "194.163.167.32:1080",
-        "195.35.113.29:1080",
-        "64.227.131.240:1080",
-        "174.138.61.184:1080",
-        "195.35.113.29:1080",
+
     )
     SOCKS5_USERNAME: str = ""
     SOCKS5_PASSWORD: str = ""
@@ -129,7 +122,7 @@ class Config:
     # Proxy IP verification (toggleable)
     ENABLE_PROXY_IP_CHECK: bool = False
     PROXY_IP_CHECK_URL: str = "https://api.ipify.org?format=json"
-    PROXY_IP_CHECK_TIMEOUT_MS: int = 8_000
+    PROXY_IP_CHECK_TIMEOUT_MS: int = 10_000
 
     # Logging verbosity
     VERBOSE_NON_PROXY_ERRORS: bool = False
@@ -419,12 +412,14 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool, bool]:
             try:
                 page.wait_for_selector(cfg.POPUP_ON_SELECTOR, timeout=cfg.POPUP_ON_WAIT_TIMEOUT_MS)
             except PlaywrightTimeoutError:
-                # This is not the "unexpected popup" case; keep behavior simple:
-                # capture only if policy is "always" (unexpected=False).
-                shot = capture_screenshot_if_needed(page, cfg, "popup_on_not_detected", unexpected=False)
+                # Treat this as UNEXPECTED (same semantics as unexpected popup message).
+                unexpected = True
+
+                # Screenshot per policy (with SCREENSHOT_POLICY="unexpected", this WILL capture)
+                shot = capture_screenshot_if_needed(page, cfg, "popup_on_not_detected", unexpected=unexpected)
 
                 msg = (
-                    "Popup did not transition to 'on' state after clicking Redeem.\n"
+                    "🛑 Popup did not transition to 'on' state after clicking Redeem.\n"
                     f"Coupon: {coupon_code_used}\n"
                     f"Waited for selector: {cfg.POPUP_ON_SELECTOR}\n"
                     f"Screenshot: {shot or '(not captured by policy)'}"
@@ -434,9 +429,28 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool, bool]:
                 if proxy_server and cfg.ENABLE_PROXY_IP_CHECK:
                     msg += f"\nProxy: {proxy_server}\nProxy IP: {observed_proxy_ip or '(unknown)'}"
 
-                # Only send on this case if ALWAYS_SEND_DISCORD=True (unchanged from your earlier logic)
-                if cfg.DISCORD_WEBHOOK_URL and cfg.ALWAYS_SEND_DISCORD:
-                    send_discord_with_optional_shot(cfg, f"⚠️ Popup not 'on'\n```{msg}```", shot)
+                # Discord behavior (same semantics as "unexpected popup message"):
+                # - If ALWAYS_SEND_DISCORD: send every run
+                # - Else: send on unexpected
+                if cfg.DISCORD_WEBHOOK_URL:
+                    if cfg.ALWAYS_SEND_DISCORD:
+                        content = f"🛑 Popup not 'on'\n```{msg}```"
+                        send_discord_with_optional_shot(cfg, content, shot)
+                    else:
+                        content = (
+                            "🛑 Unexpected coupon popup state (no '.on' after Redeem)\n"
+                            f"Coupon: `{coupon_code_used}`\n"
+                            f"Waited for selector: `{cfg.POPUP_ON_SELECTOR}`"
+                        )
+                        if is_debug_coupon:
+                            content += "\nDEBUG_COUPON_CODE used: `True`"
+                        if proxy_server and cfg.ENABLE_PROXY_IP_CHECK:
+                            content += f"\nProxy: `{proxy_server}`\nProxy IP: `{observed_proxy_ip or '(unknown)'}`"
+                        send_discord_with_optional_shot(cfg, content, shot)
+
+                # Stop on unexpected (same behavior as other unexpected cases)
+                if cfg.STOP_ON_UNEXPECTED:
+                    return False, msg, True, proxy_load_error
 
                 return False, msg, False, proxy_load_error
 
@@ -451,14 +465,14 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool, bool]:
             # Log message
             if is_expected_failure:
                 log_msg = (
-                    "Popup detected (popAlert is 'on'). Redemption failed as expected (normal invalid-coupon message).\n"
+                    "✅ Popup detected (popAlert is 'on'). Redemption failed as expected (normal invalid-coupon message).\n"
                     f"Coupon: {coupon_code_used}\n"
                     f"Popup HTML: {popup_html}\n"
                     f"Screenshot: {shot or '(not captured by policy)'}"
                 )
             else:
                 log_msg = (
-                    "Popup detected (popAlert is 'on'). Result is UNEXPECTED (message differs).\n"
+                    "🛑 Popup detected (popAlert is 'on'). Result is UNEXPECTED (message differs).\n"
                     f"Coupon: {coupon_code_used}\n"
                     f"Popup HTML: {popup_html}\n"
                     f"Expected HTML: {cfg.EXPECTED_POPUP_MESSAGE_HTML}\n"
@@ -470,12 +484,12 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool, bool]:
             if proxy_server and cfg.ENABLE_PROXY_IP_CHECK:
                 log_msg += f"\nProxy: {proxy_server}\nProxy IP: {observed_proxy_ip or '(unknown)'}"
 
-            # Discord behavior:
+            # Discord behavior (unchanged semantics):
             # - If ALWAYS_SEND_DISCORD: send every run
             # - Else: send only on unexpected popup
             if cfg.DISCORD_WEBHOOK_URL:
                 if cfg.ALWAYS_SEND_DISCORD:
-                    header = "✅ Expected failure popup" if is_expected_failure else "🚨 Unexpected popup"
+                    header = "✅ Expected failure popup" if is_expected_failure else "🛑 🚨 Unexpected popup"
                     content = f"{header}\nCoupon: `{coupon_code_used}`\nPopup HTML: `{popup_html}`"
                     if is_debug_coupon:
                         content += "\nDEBUG_COUPON_CODE used: `True`"
@@ -490,7 +504,7 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool, bool]:
                 else:
                     if unexpected:
                         content = (
-                            "🚨 Unexpected coupon popup message\n"
+                            "🛑 🚨 Unexpected coupon popup message\n"
                             f"Coupon: `{coupon_code_used}`\n"
                             f"Popup HTML: `{popup_html}`"
                         )
@@ -523,7 +537,7 @@ def run_once(cfg: Config) -> Tuple[bool, str, bool, bool]:
             else:
                 err = f"Exception: {_one_line_error(e)}"
 
-            # Discord: only if ALWAYS_SEND_DISCORD=True
+            # Discord: only if ALWAYS_SEND_DISCORD=True (unchanged)
             if cfg.DISCORD_WEBHOOK_URL and cfg.ALWAYS_SEND_DISCORD:
                 dbg = f"Exception: {e!s}\n{traceback.format_exc()}"
                 send_discord(cfg.DISCORD_WEBHOOK_URL, f"🚨 Exception\n```{dbg[:1800]}```")
@@ -561,7 +575,7 @@ def main() -> None:
         print(f"[{stamp}] run={run_count} status={status} elapsed={elapsed:.2f}s\n{msg}\n")
 
         if should_stop:
-            print("Stopping script because STOP_ON_UNEXPECTED=True and an unexpected popup was detected.")
+            print("🛑 Stopping script because STOP_ON_UNEXPECTED=True and an unexpected popup was detected.")
             raise SystemExit(2)
 
         if CFG.RUN_ONCE:
@@ -569,7 +583,8 @@ def main() -> None:
 
         # Skip waiting on proxy/playwright load errors
         if proxy_load_error:
-            print("Proxy/playwright load error detected — skipping interval wait and starting next run immediately.")
+            print(f"Proxy/playwright load error detected — skipping interval wait and starting next run in {CFG.SKIP_INTERVAL_SECONDS} seconds.")
+            time.sleep(CFG.SKIP_INTERVAL_SECONDS)
             continue
 
         wait_time = get_randomized_interval(CFG.INTERVAL_SECONDS)
